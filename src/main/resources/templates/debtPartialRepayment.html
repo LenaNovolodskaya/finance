@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en"
+      xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org">
+    
+    <head>
+        <meta charset="UTF-8">
+        <title>Частичное погашение долга</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+        <link th:href="@{/css/style.css}" rel="stylesheet" />
+        <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.8/dist/umd/popper.min.js" integrity="sha384-I7E8VVD/ismYTF4hNIPjVp/Zjvgyol6VFvRkX/vR+Vc4jQkC+hVqc2pM8ODewa9r" crossorigin="anonymous"></script>
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.min.js" integrity="sha384-0pUGZvbkm6XF6gxjEnlmuGrJXVbNuzT9qBBavbLwCsOGabYfZo0T0to5eqruptLy" crossorigin="anonymous"></script>
+    </head>
+    
+    <body>
+        <div th:replace="~{header :: header}"></div>
+
+        <div class="form-container">
+            <h2>Частичное погашение долга</h2>
+
+            <div th:if="${debt != null}" class="card mb-1">
+                <div class="card-body mt-1">
+                    <div class="row">
+                        <h4 class="mt-1">
+                            <strong th:if="${debt.isLent}" class="text-success">Вам должны</strong>
+                            <strong th:unless="${debt.isLent}" class="text-danger">Вы должны</strong>
+                        </h4>
+                        <div class="col-md-6">
+                            <p><strong>Контакт:</strong> <span th:text="${debt.contactName}"></span></p>
+                            <p>
+                                <p><strong>Дата возврата:</strong> <span th:text="${#temporals.format(debt.dueDate, 'dd.MM.yyyy')}"></span></p>
+                            </p>
+                        </div>
+                        <div class="col-md-6">
+                            <p><strong>Изначальная сумма:</strong> <span th:text="${#numbers.formatDecimal(debt.amount, 1, 2)}"></span></p>
+                            <p><strong>Оставшаяся сумма:</strong> <span th:text="${#numbers.formatDecimal(remainingAmount, 1, 2)}"></span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div th:if="${error}" class="alert alert-danger" role="alert">
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                <span th:text="${error}"></span>
+            </div>
+
+            <form th:action="@{/debt/partialRepayment/{id}(id=${debt.id})}" method="post" class="needs-validation" novalidate>
+                <div class="mb-3">
+                    <label for="repaymentAmount" class="form-label">Сумма погашения</label>
+                    <input type="number" class="form-control" id="repaymentAmount" name="repaymentAmount"
+                           th:value="${repaymentAmount != null ? repaymentAmount : '0.01'}"
+                           step="0.01" min="0.01" th:max="${remainingAmount}" required>
+                    <div class="invalid-feedback">Введите корректную сумму</div>
+                     <small class="form-text text-muted">
+                        Введите сумму, которую вы хотите погасить. Максимум: <span th:text="${#numbers.formatDecimal(remainingAmount, 1, 2)}"></span>.
+                    </small>
+                </div>
+
+                <button type="submit" class="btn btn-primary me-2">Погасить часть</button>
+                <a th:href="@{/debt/debtList}" class="btn btn-secondary">Отмена</a>
+            </form>
+        </div>
+
+        <script>
+        (function () {
+          'use strict'
+          var forms = document.querySelectorAll('.needs-validation')
+
+          Array.prototype.slice.call(forms)
+            .forEach(function (form) {
+              form.addEventListener('submit', function (event) {
+                if (!form.checkValidity()) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                }
+
+                form.classList.add('was-validated')
+              }, false)
+            })
+        })()
+        </script>
+    </body>
+</html> 

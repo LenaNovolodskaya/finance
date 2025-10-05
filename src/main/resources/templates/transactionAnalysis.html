@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="en" 
+      xmlns = "http://www.w3.org/1999/xhtml"
+      xmlns:th="http://www.thymeleaf.org">
+    
+    <head>
+        <meta charset="UTF-8">
+        <title>Анализ финансов</title>
+        
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+        <link th:href="@{/css/style.css}" rel="stylesheet" />
+        <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.8/dist/umd/popper.min.js" integrity="sha384-I7E8VVD/ismYTF4hNIPjVp/Zjvgyol6VFvRkX/vR+Vc4jQkC+hVqc2pM8ODewa9r" crossorigin="anonymous"></script>
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.min.js" integrity="sha384-0pUGZvbkm6XF6gxjEnlmuGrJXVbNuzT9qBBavbLwCsOGabYfZo0T0to5eqruptLy" crossorigin="anonymous"></script>
+    </head>
+    
+    <body>
+        <div th:replace="~{header :: header}"></div>
+        
+        <div class="container mt-4">
+            <h1>Анализ финансов</h1>
+
+            <form th:action="@{/transaction/transactionAnalysis}" method="get" class="row g-3 align-items-center mb-2">
+                <div class="col-auto">
+                    <span for="startDate" class="col-form-label align-middle"><strong>Начало периода:</strong></span>
+                </div>
+                <div class="col-auto">
+                    <input type="date" id="startDate" name="startDate" class="form-control" th:value="${startDate}">
+                </div>
+                <div class="col-auto">
+                    <span for="endDate" class="col-form-label align-middle"><strong>Конец периода:</strong></span>
+                </div>
+                <div class="col-auto">
+                    <input type="date" id="endDate" name="endDate" class="form-control" th:value="${endDate}">
+                </div>
+                <div class="col-12 mt-2">
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input align-middle" type="checkbox" id="excludeDebtsAnalysis" name="excludeDebts" th:checked="${excludeDebts}">
+                        <span class="form-check-label align-middle" for="excludeDebtsAnalysis"><strong>Не учитывать долги</strong></span>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input align-middle" type="checkbox" id="excludeGoalsAnalysis" name="excludeGoals" th:checked="${excludeGoals}">
+                        <span class="form-check-label align-middle" for="excludeGoalsAnalysis"><strong>Не учитывать финансовые цели</strong></span>
+                    </div>
+                </div>
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-primary">Применить</button>
+                </div>
+                <div class="col-auto">
+                    <a th:href="@{/transaction/transactionAnalysis}" class="btn btn-secondary">Сбросить</a>
+                </div>
+            </form>
+
+            <a href="/transaction/transactionList" class="btn btn-secondary mb-1">← Назад к операциям</a>
+
+            <script th:inline="javascript">
+                /*<![CDATA[*/
+                var chartData = {
+                    expenseCategories: JSON.parse(/*[[${expenseByCategoryJson}]]*/ 'null'),
+                    income: /*[[${totalIncome}]]*/ 0,
+                    expense: /*[[${totalExpense}]]*/ 0,
+                    dailyBalance: JSON.parse(/*[[${dailyBalanceJson}]]*/ 'null')
+                };
+                /*]]>*/
+            </script>
+
+            <div class="row mt-2">
+                <div class="col-md-6">
+                    <div class="card mb-4">
+                        <div class="card-header bg-light">
+                            <h5>Распределение расходов по категориям</h5>
+                        </div>
+                        <div class="card-body">
+                            <canvas id="expenseChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-md-6">
+                    <div class="card mb-4">
+                        <div class="card-header bg-light">
+                            <h5>Соотношение доходов и расходов</h5>
+                        </div>
+                        <div class="card-body">
+                            <canvas id="incomeExpenseChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header bg-light">
+                    <h5>Динамика баланса по дням</h5>
+                </div>
+                <div class="card-body">
+                    <canvas id="balanceChart"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <script>
+            let expenseChartSlices = [];
+            let expenseChartGeo = {};
+            let hoveredExpenseSlice = null;
+
+            let incomeExpenseChartSlices = [];
+            let incomeExpenseChartGeo = {};
+            let hoveredIncomeExpenseSlice = null;
+
+            let balanceChartPoints = [];
+            let balanceChartGeo = {};
+            let hoveredBalancePoint = null;
+
+            document.addEventListener('DOMContentLoaded', function() {
+                const startDateInput = document.getElementById('startDate');
+                const endDateInput = document.getElementById('endDate');
+
+                if (startDateInput && endDateInput && (!startDateInput.value || !endDateInput.value)) {
+                    const today = new Date();
+                    const year = today.getFullYear();
+                    const month = today.getMonth();
+
+                    const firstDay = new Date(year, month, 1);
+                    const lastDay = new Date(year, month + 1, 0);
+
+                    const formatDate = (date) => {
+                        const d = new Date(date);
+                        let monthStr = '' + (d.getMonth() + 1);
+                        let dayStr = '' + d.getDate();
+                        const yearStr = d.getFullYear();
+
+                        if (monthStr.length < 2) monthStr = '0' + monthStr;
+                        if (dayStr.length < 2) dayStr = '0' + dayStr;
+
+                        return [yearStr, monthStr, dayStr].join('-');
+                    };
+
+                    startDateInput.value = formatDate(firstDay);
+                    endDateInput.value = formatDate(lastDay);
+                }
+
+                const colorPalette = [
+                    '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0',
+                    '#9966FF', '#FF9F40', '#8AC24A', '#607D8B',
+                    '#D4502F', '#243c69', '#DC143C', '#00FFFF',
+                    '#00008B', '#A9A9A9', '#006400', '#BDB76B'
+                ];
+
+                function drawExpenseChart(canvasId, data, categories, colors, hoveredSliceInfo) {
+                    expenseChartSlices = [];
+                    const canvas = document.getElementById(canvasId);
+                    if (!canvas.getContext) {
+                        console.error("Canvas not supported!");
+                        return;
+                    }
+                    const parentWidth = canvas.parentElement.clientWidth;
+                    canvas.width = parentWidth;
+                    canvas.height = 400;
+
+                    const ctx = canvas.getContext('2d');
+                    const chartAreaWidth = canvas.width * 0.6; 
+                    const legendAreaWidth = canvas.width * 0.4;
+                    const centerX = chartAreaWidth / 2;
+                    const centerY = canvas.height / 2;
+                    const radius = Math.min(centerX, centerY) * 0.8;
+                    const cutoutRadius = radius * 0.4;
+
+                    expenseChartGeo = { centerX, centerY, radius, cutoutRadius, canvas };
+
+                    let totalValue = 0;
+                    for (const category in data) {
+                        totalValue += data[category];
+                    }
+
+                    if (totalValue === 0) {
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.font = '16px Arial';
+                        ctx.fillText("Нет данных о расходах", canvas.width / 2, canvas.height / 2);
+                        return;
+                    }
+
+                    const legendX = chartAreaWidth + 10;
+                    const legendItemHeight = 20;
+                    const legendColorBoxSize = 10;
+                    const legendTextMaxWidth = legendAreaWidth - legendColorBoxSize - 25;
+
+                    let legendItemCount = 0;
+                    for (const category of categories) {
+                        const value = data[category] || 0;
+                        if (value > 0) {
+                            legendItemCount++;
+                        }
+                    }
+                    const totalLegendHeight = legendItemCount * legendItemHeight;
+                    let currentLegendY = Math.max(20, (canvas.height - totalLegendHeight) / 2);
+
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                    let startAngle = -Math.PI / 2;
+                    let colorIndex = 0;
+                    for (const category of categories) {
+                        const value = data[category] || 0;
+                        if (value <=0) continue;
+
+                        const sliceAngle = (value / totalValue) * 2 * Math.PI;
+                        const endAngle = startAngle + sliceAngle;
+                        const color = colors[colorIndex % colors.length];
+
+                        expenseChartSlices.push({ category, value, startAngle, endAngle, color, centerX, centerY, radius });
+
+                        ctx.beginPath();
+                        ctx.moveTo(centerX, centerY);
+                        ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+                        ctx.closePath();
+                        ctx.fillStyle = color;
+                        ctx.fill();
+
+                        ctx.fillStyle = color;
+                        ctx.fillRect(legendX, currentLegendY, legendColorBoxSize, legendColorBoxSize);
+                        ctx.fillStyle = '#000';
+                        ctx.font = '12px Arial';
+                        ctx.textAlign = 'left';
+                        ctx.textBaseline = 'middle';
+                        const legendText = `${category}: ${(value / totalValue * 100).toFixed(1)}%`;
+                        ctx.fillText(legendText, legendX + legendColorBoxSize + 5, currentLegendY + legendColorBoxSize / 2, legendTextMaxWidth);
+                        currentLegendY += legendItemHeight;
+
+                        startAngle = endAngle;
+                        colorIndex++;
+                    }
+
+                    ctx.beginPath();
+                    ctx.arc(centerX, centerY, cutoutRadius, 0, 2 * Math.PI);
+                    ctx.fillStyle = 'white';
+                    ctx.fill();
+
+                    if (hoveredSliceInfo) {
+                        drawTooltip(ctx, `${hoveredSliceInfo.category}: ${hoveredSliceInfo.value.toFixed(2)} руб.`, hoveredSliceInfo.mouseX, hoveredSliceInfo.mouseY, canvas);
+                    }
+                }
+
+                function drawIncomeExpenseChart(canvasId, income, expense, colors, hoveredSliceInfo) {
+                    incomeExpenseChartSlices = [];
+                    const canvas = document.getElementById(canvasId);
+                    if (!canvas.getContext) {
+                        console.error("Canvas not supported!");
+                        return;
+                    }
+                    const parentWidth = canvas.parentElement.clientWidth;
+                    canvas.width = parentWidth;
+                    canvas.height = 400;
+
+                    const ctx = canvas.getContext('2d');
+                    const chartAreaWidth = canvas.width * 0.6; 
+                    const legendAreaWidth = canvas.width * 0.4;
+                    const centerX = chartAreaWidth / 2;
+                    const centerY = canvas.height / 2;
+                    const radius = Math.min(centerX, centerY) * 0.8;
+                    const cutoutRadius = radius * 0.4;
+                    const total = income + expense;
+
+                    incomeExpenseChartGeo = { centerX, centerY, radius, cutoutRadius, canvas };
+
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                    if (total === 0) {
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.font = '16px Arial';
+                        ctx.fillText("Нет данных", canvas.width / 2, canvas.height / 2);
+                        return;
+                    }
+
+                    const legendX = chartAreaWidth + 10;
+                    const legendItemHeight = 20;
+                    const legendColorBoxSize = 10;
+                    const legendTextMaxWidth = legendAreaWidth - legendColorBoxSize - 25;
+
+                    let legendItemCountIncomeExpense = 0;
+                    if (income > 0) legendItemCountIncomeExpense++;
+                    if (expense > 0) legendItemCountIncomeExpense++;
+                    
+                    const totalLegendHeightIncomeExpense = legendItemCountIncomeExpense * legendItemHeight;
+                    let currentLegendYIncomeExpense = Math.max(20, (canvas.height - totalLegendHeightIncomeExpense) / 2);
+
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                    let startAngle = -Math.PI / 2;
+
+                    if (income > 0) {
+                        const incomeAngle = (income / total) * 2 * Math.PI;
+                        const endAngle = startAngle + incomeAngle;
+                        incomeExpenseChartSlices.push({ label: 'Доходы', value: income, startAngle, endAngle, color: colors[0], centerX, centerY, radius });
+                        
+                        ctx.beginPath();
+                        ctx.moveTo(centerX, centerY);
+                        ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+                        ctx.closePath();
+                        ctx.fillStyle = colors[0];
+                        ctx.fill();
+
+                        ctx.fillStyle = colors[0];
+                        ctx.fillRect(legendX, currentLegendYIncomeExpense, legendColorBoxSize, legendColorBoxSize);
+                        ctx.fillStyle = '#000';
+                        ctx.font = '12px Arial';
+                        ctx.textAlign = 'left';
+                        ctx.textBaseline = 'middle';
+                        const incomeLegendText = `Доходы: ${(income / total * 100).toFixed(1)}%`;
+                        ctx.fillText(incomeLegendText, legendX + legendColorBoxSize + 5, currentLegendYIncomeExpense + legendColorBoxSize / 2, legendTextMaxWidth);
+                        currentLegendYIncomeExpense += legendItemHeight;
+                        startAngle += incomeAngle;
+                    }
+
+                    if (expense > 0) {
+                        const expenseAngle = (expense / total) * 2 * Math.PI;
+                        const endAngle = startAngle + expenseAngle;
+                        incomeExpenseChartSlices.push({ label: 'Расходы', value: expense, startAngle, endAngle, color: colors[1], centerX, centerY, radius });
+
+                        ctx.beginPath();
+                        ctx.moveTo(centerX, centerY);
+                        ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+                        ctx.closePath();
+                        ctx.fillStyle = colors[1];
+                        ctx.fill();
+                        
+                        ctx.fillStyle = colors[1];
+                        ctx.fillRect(legendX, currentLegendYIncomeExpense, legendColorBoxSize, legendColorBoxSize);
+                        ctx.fillStyle = '#000';
+                        ctx.font = '12px Arial';
+                        ctx.textAlign = 'left';
+                        ctx.textBaseline = 'middle';
+                        const expenseLegendText = `Расходы: ${(expense / total * 100).toFixed(1)}%`;
+                        ctx.fillText(expenseLegendText, legendX + legendColorBoxSize + 5, currentLegendYIncomeExpense + legendColorBoxSize / 2, legendTextMaxWidth);
+                    }
+
+                    ctx.beginPath();
+                    ctx.arc(centerX, centerY, cutoutRadius, 0, 2 * Math.PI);
+                    ctx.fillStyle = 'white';
+                    ctx.fill();
+
+                    if (hoveredSliceInfo) {
+                        drawTooltip(ctx, `${hoveredSliceInfo.label}: ${hoveredSliceInfo.value.toFixed(2)} руб.`, hoveredSliceInfo.mouseX, hoveredSliceInfo.mouseY, canvas);
+                    }
+                }
+
+                function drawTooltip(ctx, text, mouseX, mouseY, canvas) {
+                    const padding = 10;
+                    const textMeasurement = ctx.measureText(text);
+                    const rectWidth = textMeasurement.width + 2 * padding;
+                    const rectHeight = 20 + 2 * padding;
+                    let rectX = mouseX + 15;
+                    let rectY = mouseY + 15;
+
+                    if (rectX + rectWidth > canvas.width) {
+                        rectX = mouseX - rectWidth - 15;
+                    }
+                    if (rectY + rectHeight > canvas.height) {
+                        rectY = mouseY - rectHeight - 15;
+                    }
+                     if (rectX < 0) rectX = 0;
+                     if (rectY < 0) rectY = 0;
+
+
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+                    ctx.fillRect(rectX, rectY, rectWidth, rectHeight);
+                    
+                    ctx.fillStyle = 'white';
+                    ctx.font = '12px Arial';
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(text, rectX + padding, rectY + rectHeight / 2);
+                }
+
+                function getMousePos(canvas, evt) {
+                    const rect = canvas.getBoundingClientRect();
+                    return {
+                        x: evt.clientX - rect.left,
+                        y: evt.clientY - rect.top
+                    };
+                }
+
+                const expenseCanvas = document.getElementById('expenseChart');
+                if (expenseCanvas) {
+                    expenseCanvas.addEventListener('mousemove', function(evt) {
+                        const mousePos = getMousePos(expenseCanvas, evt);
+                        let newHoveredSlice = null;
+
+                        const dx = mousePos.x - expenseChartGeo.centerX;
+                        const dy = mousePos.y - expenseChartGeo.centerY;
+                        const distanceFromCenter = Math.sqrt(dx * dx + dy * dy);
+
+                        if (distanceFromCenter >= expenseChartGeo.cutoutRadius && distanceFromCenter <= expenseChartGeo.radius) {
+                            let angle = Math.atan2(dy, dx);
+                            if (angle < -Math.PI / 2) {
+                                angle += 2 * Math.PI;
+                            }
+                            
+                            for (const slice of expenseChartSlices) {
+                                if (angle >= slice.startAngle && angle < slice.endAngle) {
+                                    newHoveredSlice = { ...slice, mouseX: mousePos.x, mouseY: mousePos.y };
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if (hoveredExpenseSlice?.category !== newHoveredSlice?.category || hoveredExpenseSlice?.value !== newHoveredSlice?.value) {
+                             hoveredExpenseSlice = newHoveredSlice;
+                             const categories = Object.keys(chartData.expenseCategories);
+                             drawExpenseChart('expenseChart', chartData.expenseCategories, categories, colorPalette, hoveredExpenseSlice);
+                        }
+                    });
+
+                    expenseCanvas.addEventListener('mouseout', function(evt) {
+                        if (hoveredExpenseSlice) {
+                            hoveredExpenseSlice = null;
+                            const categories = Object.keys(chartData.expenseCategories);
+                            drawExpenseChart('expenseChart', chartData.expenseCategories, categories, colorPalette, null);
+                        }
+                    });
+                }
+
+                const incomeExpenseCanvas = document.getElementById('incomeExpenseChart');
+                if (incomeExpenseCanvas) {
+                    incomeExpenseCanvas.addEventListener('mousemove', function(evt) {
+                        const mousePos = getMousePos(incomeExpenseCanvas, evt);
+                        let newHoveredSlice = null;
+
+                        const dx = mousePos.x - incomeExpenseChartGeo.centerX;
+                        const dy = mousePos.y - incomeExpenseChartGeo.centerY;
+                        const distanceFromCenter = Math.sqrt(dx * dx + dy * dy);
+
+                        if (distanceFromCenter >= incomeExpenseChartGeo.cutoutRadius && distanceFromCenter <= incomeExpenseChartGeo.radius) {
+                            let angle = Math.atan2(dy, dx);
+                             if (angle < -Math.PI / 2) {
+                                angle += 2 * Math.PI;
+                            }
+                            for (const slice of incomeExpenseChartSlices) {
+                                if (angle >= slice.startAngle && angle < slice.endAngle) {
+                                    newHoveredSlice = { ...slice, mouseX: mousePos.x, mouseY: mousePos.y };
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (hoveredIncomeExpenseSlice?.label !== newHoveredSlice?.label || hoveredIncomeExpenseSlice?.value !== newHoveredSlice?.value) {
+                            hoveredIncomeExpenseSlice = newHoveredSlice;
+                            drawIncomeExpenseChart('incomeExpenseChart', chartData.income, chartData.expense, ['#4BC0C0', '#FF6384'], hoveredIncomeExpenseSlice);
+                        }
+                    });
+
+                    incomeExpenseCanvas.addEventListener('mouseout', function(evt) {
+                        if (hoveredIncomeExpenseSlice) {
+                            hoveredIncomeExpenseSlice = null;
+                            drawIncomeExpenseChart('incomeExpenseChart', chartData.income, chartData.expense, ['#4BC0C0', '#FF6384'], null);
+                        }
+                    });
+                }
+
+                function drawBalanceChart(canvasId, dailyBalanceData, hoveredPointInfo) {
+                    balanceChartPoints = [];
+                    const canvas = document.getElementById(canvasId);
+                    if (!canvas.getContext) {
+                        console.error("Canvas not supported!");
+                        return;
+                    }
+                    const parentWidth = canvas.parentElement.clientWidth;
+                    canvas.width = parentWidth;
+                    canvas.height = 400; 
+
+                    const ctx = canvas.getContext('2d');
+                    const padding = 80;
+                    const chartWidth = canvas.width - 2 * padding;
+                    const chartHeight = canvas.height - 2 * padding;
+
+                    balanceChartGeo = { padding, chartWidth, chartHeight, canvas };
+
+                    const dates = Object.keys(dailyBalanceData).sort((a, b) => new Date(a) - new Date(b));
+                    const balances = dates.map(date => dailyBalanceData[date]);
+
+                    ctx.clearRect(0, 0, canvas.width, canvas.height); 
+
+                    if (dates.length === 0) {
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.font = '16px Arial';
+                        ctx.fillText("Нет данных о балансе", canvas.width / 2, canvas.height / 2);
+                        return;
+                    }
+
+                    const maxBalance = Math.max(...balances, 0); 
+                    const minBalance = Math.min(...balances, 0); 
+                    const range = maxBalance - minBalance === 0 ? (maxBalance === 0 ? 1 : Math.abs(maxBalance)) : maxBalance - minBalance; 
+
+                    const getX = (index) => padding + (index / (dates.length - 1 || 1)) * chartWidth; 
+                    const getY = (value) => padding + chartHeight - ((value - minBalance) / range) * chartHeight;
+
+                    ctx.beginPath();
+                    ctx.moveTo(padding, padding);
+                    ctx.lineTo(padding, padding + chartHeight);
+                    ctx.stroke();
+
+                    ctx.beginPath();
+                    ctx.moveTo(padding, padding + chartHeight);
+                    ctx.lineTo(padding + chartWidth, padding + chartHeight);
+                    ctx.stroke();
+
+                    const numYLabels = 5;
+                    ctx.textAlign = 'right';
+                    ctx.textBaseline = 'middle';
+                    ctx.font = '10px Arial';
+                    for (let i = 0; i <= numYLabels; i++) {
+                        const value = minBalance + (range / numYLabels) * i;
+                        const yPos = getY(value);
+                        ctx.fillText(value.toFixed(2) + ' руб.', padding - 10, yPos);
+                        if (i > 0) { 
+                            ctx.beginPath();
+                            ctx.moveTo(padding, yPos);
+                            ctx.lineTo(padding + chartWidth, yPos);
+                            ctx.strokeStyle = '#e0e0e0'; 
+                            ctx.stroke();
+                            ctx.strokeStyle = '#000'; 
+                        }
+                    }
+
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'top';
+                    dates.forEach((date, index) => {
+                        const xPos = getX(index);
+                        const maxLabels = Math.floor(chartWidth / 60); 
+                        const labelStep = dates.length > maxLabels ? Math.ceil(dates.length / maxLabels) : 1;
+                        if (index % labelStep === 0 || dates.length === 1) {
+                             ctx.fillText(new Date(date).toLocaleDateString('ru-RU'), xPos, padding + chartHeight + 5);
+                        }
+                        if (index > 0 && dates.length > 1) { 
+                            ctx.beginPath();
+                            ctx.moveTo(xPos, padding);
+                            ctx.lineTo(xPos, padding + chartHeight);
+                            ctx.strokeStyle = '#e0e0e0';
+                            ctx.stroke();
+                            ctx.strokeStyle = '#000';
+                        }
+                    });
+
+                    ctx.beginPath();
+                    if (dates.length > 0) {
+                        ctx.moveTo(getX(0), getY(balances[0]));
+                        balances.forEach((balance, index) => {
+                            if (index > 0) {
+                                ctx.lineTo(getX(index), getY(balances[index]));
+                            }
+                            balanceChartPoints.push({
+                                x: getX(index),
+                                y: getY(balances[index]),
+                                date: new Date(dates[index]).toLocaleDateString('ru-RU'),
+                                balance: balances[index]
+                            });
+                        });
+                    }
+                    ctx.strokeStyle = '#36A2EB';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                    ctx.lineWidth = 1; 
+
+                    ctx.fillStyle = '#36A2EB';
+                    balanceChartPoints.forEach(point => {
+                        ctx.beginPath();
+                        ctx.arc(point.x, point.y, 3, 0, 2 * Math.PI);
+                        ctx.fill();
+                    });
+
+                    ctx.fillStyle = '#36A2EB';
+                    ctx.fillRect(padding + chartWidth - 100, padding - 20, 10, 10);
+                    ctx.fillStyle = '#000';
+                    ctx.font = '12px Arial';
+                    ctx.textAlign = 'left';
+                    ctx.fillText('Баланс (руб.)', padding + chartWidth - 85, padding - 15);
+                    
+                    if (hoveredPointInfo) {
+                        drawTooltip(ctx, `${hoveredPointInfo.balance.toFixed(2)} руб.`, hoveredPointInfo.mouseX, hoveredPointInfo.mouseY, canvas);
+                    }
+                }
+
+                const balanceCanvas = document.getElementById('balanceChart');
+                if (balanceCanvas) {
+                    balanceCanvas.addEventListener('mousemove', function(evt) {
+                        const mousePos = getMousePos(balanceCanvas, evt);
+                        let newHoveredPoint = null;
+                        const hoverRadius = 10;
+
+                        for (const point of balanceChartPoints) {
+                            const dx = mousePos.x - point.x;
+                            const dy = mousePos.y - point.y;
+                            if (dx * dx + dy * dy < hoverRadius * hoverRadius) {
+                                newHoveredPoint = { ...point, mouseX: mousePos.x, mouseY: mousePos.y };
+                                break;
+                            }
+                        }
+
+                        if (hoveredBalancePoint?.date !== newHoveredPoint?.date || hoveredBalancePoint?.balance !== newHoveredPoint?.balance) {
+                            hoveredBalancePoint = newHoveredPoint;
+                            drawBalanceChart('balanceChart', chartData.dailyBalance, hoveredBalancePoint);
+                        }
+                    });
+
+                    balanceCanvas.addEventListener('mouseout', function(evt) {
+                        if (hoveredBalancePoint) {
+                            hoveredBalancePoint = null;
+                            drawBalanceChart('balanceChart', chartData.dailyBalance, null);
+                        }
+                    });
+                }
+
+                try {
+
+                    // 1. Диаграмма расходов по категориям
+                    if (chartData.expenseCategories && Object.keys(chartData.expenseCategories).length > 0) {
+                        const categories = Object.keys(chartData.expenseCategories);
+                        drawExpenseChart('expenseChart', chartData.expenseCategories, categories, colorPalette, null);
+                    } else {
+                        console.warn("Нет данных о расходах по категориям");
+                        const expenseCanvas = document.getElementById('expenseChart');
+                        const expenseCtx = expenseCanvas.getContext('2d');
+                        expenseCtx.clearRect(0, 0, expenseCanvas.width, expenseCanvas.height);
+                        expenseCtx.textAlign = 'center';
+                        expenseCtx.textBaseline = 'middle';
+                        expenseCtx.font = '16px Arial';
+                        expenseCtx.fillText("Нет данных о расходах по категориям", expenseCanvas.width / 2, expenseCanvas.height / 2);
+                    }
+
+                    // 2. Диаграмма доходы/расходы
+                    if (chartData.income > 0 || chartData.expense > 0) {
+                        drawIncomeExpenseChart('incomeExpenseChart', chartData.income, chartData.expense, ['#4BC0C0', '#FF6384'], null);
+                    } else {
+                         const incomeExpenseCanvas = document.getElementById('incomeExpenseChart');
+                         const incomeExpenseCtx = incomeExpenseCanvas.getContext('2d');
+                         incomeExpenseCtx.clearRect(0, 0, incomeExpenseCanvas.width, incomeExpenseCanvas.height);
+                         incomeExpenseCtx.textAlign = 'center';
+                         incomeExpenseCtx.textBaseline = 'middle';
+                         incomeExpenseCtx.font = '16px Arial';
+                         incomeExpenseCtx.fillText("Нет данных о доходах/расходах", incomeExpenseCanvas.width / 2, incomeExpenseCanvas.height / 2);
+                    }
+
+                    // 3. График баланса
+                    if (chartData.dailyBalance && Object.keys(chartData.dailyBalance).length > 0) {
+                        drawBalanceChart('balanceChart', chartData.dailyBalance, null);
+                    } else {
+                        const balanceCanvas = document.getElementById('balanceChart');
+                        const balanceCtx = balanceCanvas.getContext('2d');
+                        balanceCtx.clearRect(0, 0, balanceCanvas.width, balanceCanvas.height);
+                        balanceCtx.textAlign = 'center';
+                        balanceCtx.textBaseline = 'middle';
+                        balanceCtx.font = '16px Arial';
+                        balanceCtx.fillText("Нет данных о балансе", balanceCanvas.width / 2, balanceCanvas.height / 2);
+                    }
+
+                } catch (error) {
+                    console.error("Ошибка при создании графиков:", error);
+                }
+            });
+        </script>
+    </body>
+</html>
